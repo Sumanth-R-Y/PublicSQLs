@@ -1,0 +1,87 @@
+WITH FINALDATA AS (
+SELECT A.NAME AS TBLNAME, A.CREATOR AS TBLCREATOR,                   
+B.NAME AS TSNAME, B.DBNAME,                                    
+A.TYPE AS TBLTYPE,                                                   
+B.NTABLES,                                                           
+C.PARTITION, C.COMPRESS, C.PAGESAVE,                                 
+C.CARD AS TPCARD,                                                    
+CASE WHEN C.PAGESAVE > 0 THEN 1.0/(1.0-C.PAGESAVE*.01)               
+     ELSE 1                                                          
+     END AS PAGESAVECONV,                                            
+BIGINT(A.CARDF) CARDF, F.TSROWCNT,                                   
+G.CARDFCNT,                                                          
+A.AVGROWLEN, A.STATSTIME,                                            
+D.TOTALROWS, D.UPDATESTATSTIME,                                      
+D.STATSLASTTIME,                                                     
+D.STATSINSERTS,                                                      
+D.STATSDELETES,                                                      
+D.STATSUPDATES,                                                      
+D.STATSMASSDELETE,                                                   
+B.PARTITIONS, B.TYPE AS TSTYPE                                       
+,A.RECLENGTH                                                         
+,CASE WHEN (A.CARDF = -1 OR A.AVGROWLEN = -1)                        
+      AND (D.TOTALROWS IS NOT NULL AND                               
+      D.TOTALROWS >=0 )                                              
+THEN                                                                 
+   'EXCLUST'                                                         
+   WHEN (A.CARDF = -1 OR A.AVGROWLEN = -1)                           
+    AND (D.TOTALROWS IS NULL OR D.TOTALROWS <0)                      
+    THEN                                                             
+    'EXCLUBT'                                                        
+   WHEN (A.CARDF >=0 AND A.AVGROWLEN >=0)                            
+   AND (D.TOTALROWS IS NULL OR D.TOTALROWS < 0)                      
+   THEN 'EXCLRTS'                                                    
+   ELSE 'INCLUDE'                                                    
+   END AS FLAG                                                       
+FROM SYSIBM.SYSTABLES A,                                             
+SYSIBM.SYSTABLESPACE B,                                              
+SYSIBM.SYSTABLEPART C,                                               
+SYSIBM.SYSTABLESPACESTATS D,                                                                                             
+(SELECT DBNAME, NAME AS TSNAME, BIGINT(SUM(TOTALROWS))  
+ AS TSROWCNT FROM                                      
+ SYSIBM.SYSTABLESPACESTATS                             
+ GROUP BY DBNAME, NAME                                 )
+ F,                                                       
+(                                       
+SELECT DBNAME, TSNAME, BIGINT(SUM(BIGINT(CARDF))) AS  
+CARDFCNT FROM                                         
+SYSIBM.SYSTABLES                                      
+GROUP BY DBNAME, TSNAME                               
+)                                                      G                                                         
+WHERE                                                                
+                                    
+    A.DBNAME = B.DBNAME                                              
+AND A.TSNAME = B.NAME                                                                                         
+AND B.DBNAME = C.DBNAME                                              
+AND B.NAME = C.TSNAME                                                
+AND C.DBNAME = D.DBNAME                                              
+AND C.TSNAME = D.NAME                                                
+AND C.PARTITION = D.PARTITION                                        
+AND A.TYPE NOT IN ('A','V')                                          
+AND B.NAME = F.TSNAME                                                
+AND B.DBNAME = F.DBNAME                                              
+AND B.NAME = G.TSNAME                                                
+AND B.DBNAME = G.DBNAME  
+AND A.DBNAME LIKE 'xxx' 
+),
+
+
+UNCOMPDATA AS (                                           
+  SELECT                                                  
+TBLNAME, TBLCREATOR,                                      
+DBNAME, TSNAME                                    
+, FLAG,PARTITION                                          
+,CASE WHEN FLAG='EXCLUST' THEN                            
+  (RECLENGTH-8)*TOTALROWS*1.0*(PAGESAVECONV/NTABLES)      
+  WHEN FLAG='INCLUDE' AND NTABLES = 1 THEN                
+      AVGROWLEN*TOTALROWS*PAGESAVECONV*1.0                
+  WHEN FLAG='INCLUDE' AND NTABLES > 1                     
+  AND TPCARD > 0 AND CARDF>0 THEN                         
+   1.0*AVGROWLEN*(TSROWCNT/CARDFCNT)*CARDF*PAGESAVECONV   
+  WHEN FLAG='EXCLRTS' THEN                                
+   1.0*TPCARD*AVGROWLEN*PAGESAVECONV                      
+  ELSE NULL                                               
+  END AS UNCOMPDATAESTIMATE                               
+FROM FINALDATA )        
+
+SELECT * FROM UNCOMPDATA WITH UR     
